@@ -51,7 +51,29 @@ options:
   bucket_region:
     description: The region of the S3 bucket used for file transfers. By default inherit "region" or "us-east-1" if undefined.
     vars:
+    - name: ansible_aws_ssm_region
     - name: ansible_aws_ssm_bucket_region
+    default: 'us-east-1'
+    version_added: 3.0.0
+  bucket_profile:
+    description: Sets AWS profile to use for the bucket. Default fallback to the global "profile".
+    vars:
+    - name: ansible_aws_ssm_bucket_profile
+    version_added: 3.0.0
+  bucket_access_key_id:
+    description: The STS access key to use when connecting via s3.
+    vars:
+    - name: ansible_aws_ssm_bucket_access_key_id
+    version_added: 3.0.0
+  bucket_secret_access_key:
+    description: The STS secret key to use when connecting via s3.
+    vars:
+    - name: ansible_aws_ssm_bucket_secret_access_key
+    version_added: 3.0.0
+  bucket_session_token:
+    description: The STS session token to use when connecting via s3.
+    vars:
+    - name: ansible_aws_ssm_bucket_session_token
     version_added: 3.0.0
   plugin:
     description: This defines the location of the session-manager-plugin binary.
@@ -351,10 +373,8 @@ class Connection(ConnectionBase):
             raise AnsibleError("failed to find the executable specified %s."
                                " Please verify if the executable exists and re-try." % executable)
 
-        profile_name = self.get_option('profile') or ''
-        region_name = self.get_option('region')
         ssm_parameters = dict()
-        client = self._get_boto_client('ssm', region_name=region_name, profile_name=profile_name)
+        client = self._get_boto_client('ssm')
         self._client = client
         response = client.start_session(Target=self.instance_id, Parameters=ssm_parameters)
         self._session_id = response['SessionId']
@@ -362,9 +382,9 @@ class Connection(ConnectionBase):
         cmd = [
             executable,
             json.dumps(response),
-            region_name,
+            client.region_name,
             "StartSession",
-            profile_name,
+            client.profile_name,
             json.dumps({"Target": self.instance_id}),
             client.meta.endpoint_url
         ]
@@ -545,30 +565,37 @@ class Connection(ConnectionBase):
 
         return stderr
 
-    def _get_url(self, client_method, bucket_name, out_path, http_method, profile_name, extra_args=None):
+    def _get_url(self, client_method, bucket_name, out_path, http_method, extra_args=None):
         ''' Generate URL for get_object / put_object '''
-        region_name = self.get_option('bucket_region') or self.get_option('region') or 'us-east-1'
-        client = self._get_boto_client('s3', region_name=region_name, profile_name=profile_name)
+        client = self._get_boto_client('s3')
         params = {'Bucket': bucket_name, 'Key': out_path}
         if extra_args is not None:
             params.update(extra_args)
         return client.generate_presigned_url(client_method, Params=params, ExpiresIn=3600, HttpMethod=http_method)
 
-    def _get_boto_client(self, service, region_name=None, profile_name=None):
-        ''' Gets a boto3 client based on the STS token '''
+    def _get_boto_client(self, service, region_name=None):
+        ''' Gets a boto3 client based on the STS token or a local profile '''
 
+        # Default common vars for all services
+        region_name = self.get_option('region')
         aws_access_key_id = self.get_option('access_key_id')
         aws_secret_access_key = self.get_option('secret_access_key')
         aws_session_token = self.get_option('session_token')
+        profile_name = self.get_option('profile')
 
-        if aws_access_key_id is None:
-            aws_access_key_id = os.environ.get("AWS_ACCESS_KEY_ID", None)
-        if aws_secret_access_key is None:
-            aws_secret_access_key = os.environ.get("AWS_SECRET_ACCESS_KEY", None)
-        if aws_session_token is None:
-            aws_session_token = os.environ.get("AWS_SESSION_TOKEN", None)
-        if not profile_name:
-            profile_name = os.environ.get("AWS_PROFILE", None)
+        # Allow s3 to use its own region
+        if service == "s3":
+            region_name = self.get_option('bucket_region')
+
+        # Allow to override the credential chain with a specifig bucket chain if any of the bucket credential is defined
+        if service == "s3" and (self.get_option('bucket_access_key_id') 
+                or self.get_option('bucket_secret_access_key') 
+                or self.get_option('bucket_session_token')
+                or self.get_option('bucket_profile')):
+            aws_access_key_id = self.get_option('bucket_access_key_id')
+            aws_secret_access_key = self.get_option('bucket_secret_access_key')
+            aws_session_token = self.get_option('bucket_session_token')
+            profile_name = self.get_option('bucket_profile')
 
         session_args = dict(
             aws_access_key_id=aws_access_key_id,
@@ -594,8 +621,6 @@ class Connection(ConnectionBase):
         s3_path = path_unescaped.replace('\\', '/')
         bucket_url = 's3://%s/%s' % (self.get_option('bucket_name'), s3_path)
 
-        profile_name = self.get_option('profile')
-
         put_args = dict()
         put_headers = dict()
         if self.get_option('bucket_sse_mode'):
@@ -609,20 +634,20 @@ class Connection(ConnectionBase):
             put_command_headers = "; ".join(["'%s' = '%s'" % (h, v) for h, v in put_headers.items()])
             put_command = "Invoke-WebRequest -Method PUT -Headers @{%s} -InFile '%s' -Uri '%s' -UseBasicParsing" % (
                 put_command_headers, in_path,
-                self._get_url('put_object', self.get_option('bucket_name'), s3_path, 'PUT', profile_name,
+                self._get_url('put_object', self.get_option('bucket_name'), s3_path, 'PUT',
                               extra_args=put_args))
             get_command = "Invoke-WebRequest '%s' -OutFile '%s'" % (
-                self._get_url('get_object', self.get_option('bucket_name'), s3_path, 'GET', profile_name), out_path)
+                self._get_url('get_object', self.get_option('bucket_name'), s3_path, 'GET'), out_path)
         else:
             put_command_headers = "".join(["-H '%s: %s' " % (h, v) for h, v in put_headers.items()])
             put_command = "curl --request PUT %s--upload-file '%s' '%s'" % (
                 put_command_headers, in_path,
-                self._get_url('put_object', self.get_option('bucket_name'), s3_path, 'PUT', profile_name,
+                self._get_url('put_object', self.get_option('bucket_name'), s3_path, 'PUT',
                               extra_args=put_args))
             get_command = "curl '%s' -o '%s'" % (
-                self._get_url('get_object', self.get_option('bucket_name'), s3_path, 'GET', profile_name), out_path)
+                self._get_url('get_object', self.get_option('bucket_name'), s3_path, 'GET'), out_path)
 
-        client = self._get_boto_client('s3', profile_name=profile_name)
+        client = self._get_boto_client('s3')
         if ssm_action == 'get':
             (returncode, stdout, stderr) = self.exec_command(put_command, in_data=None, sudoable=False)
             with open(to_bytes(out_path, errors='surrogate_or_strict'), 'wb') as data:
