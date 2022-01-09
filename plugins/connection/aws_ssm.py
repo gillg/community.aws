@@ -38,10 +38,13 @@ options:
   instance_id:
     description: The EC2 instance ID.
     vars:
+    - name: inventory_hostname
+    - name: ansible_host
     - name: ansible_aws_ssm_instance_id
   region:
-    description: The region the EC2 instance is located.
+    description: The region the EC2 instance is located. Use region from aws_ec2 inventory plugin by default.
     vars:
+    - name: placement.region
     - name: ansible_aws_ssm_region
     default: 'us-east-1'
   bucket_name:
@@ -329,7 +332,7 @@ class Connection(ConnectionBase):
             raise AnsibleError('{0}: {1}'.format(missing_required_lib("boto3"), HAS_BOTO_3_ERROR))
 
         super(Connection, self).__init__(*args, **kwargs)
-        self.host = self._play_context.remote_addr
+        self.host = None
 
         if getattr(self._shell, "SHELL_FAMILY", '') == 'powershell':
             self.delegate = None
@@ -361,9 +364,6 @@ class Connection(ConnectionBase):
     def start_session(self):
         ''' start ssm session '''
 
-        if self.get_option('instance_id') is None:
-            self.instance_id = self.host
-        else:
             self.instance_id = self.get_option('instance_id')
 
         display.vvv(u"ESTABLISH SSM CONNECTION TO: {0}".format(self.instance_id), host=self.host)
