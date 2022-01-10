@@ -40,10 +40,13 @@ options:
     vars:
     - name: inventory_hostname
     - name: ansible_host
+    # instance_id from aws_ec2 inventory plugin
+    - name: instance_id
     - name: ansible_aws_ssm_instance_id
   region:
     description: The region the EC2 instance is located. Use region from aws_ec2 inventory plugin by default.
     vars:
+    # plaement.region from aws_ec2 inventory plugin
     - name: placement.region
     - name: ansible_aws_ssm_region
     default: 'us-east-1'
@@ -374,17 +377,17 @@ class Connection(ConnectionBase):
                                " Please verify if the executable exists and re-try." % executable)
 
         ssm_parameters = dict()
-        client = self._get_boto_client('ssm')
+        client, profile_used = self._get_boto_client('ssm')
         self._client = client
         response = client.start_session(Target=self.instance_id, Parameters=ssm_parameters)
         self._session_id = response['SessionId']
-
+        
         cmd = [
             executable,
             json.dumps(response),
-            client.region_name,
+            client.meta.region_name,
             "StartSession",
-            client.profile_name,
+            profile_used,
             json.dumps({"Target": self.instance_id}),
             client.meta.endpoint_url
         ]
@@ -596,7 +599,7 @@ class Connection(ConnectionBase):
             aws_secret_access_key = self.get_option('bucket_secret_access_key')
             aws_session_token = self.get_option('bucket_session_token')
             profile_name = self.get_option('bucket_profile')
-
+        
         session_args = dict(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -611,7 +614,8 @@ class Connection(ConnectionBase):
             service,
             config=Config(signature_version="s3v4")
         )
-        return client
+        client
+        return client, profile_name
 
     @_ssm_retry
     def _file_transport_command(self, in_path, out_path, ssm_action):
