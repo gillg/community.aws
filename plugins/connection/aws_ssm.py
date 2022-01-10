@@ -46,8 +46,8 @@ options:
   region:
     description: The region the EC2 instance is located. Use region from aws_ec2 inventory plugin by default.
     vars:
-    # plaement.region from aws_ec2 inventory plugin
-    - name: placement.region
+    # plaement.region from aws_ec2 inventory plugin, unpack region thanks to a custom get_option method
+    - name: placement
     - name: ansible_aws_ssm_region
     default: 'us-east-1'
   bucket_name:
@@ -575,6 +575,21 @@ class Connection(ConnectionBase):
         if extra_args is not None:
             params.update(extra_args)
         return client.generate_presigned_url(client_method, Params=params, ExpiresIn=3600, HttpMethod=http_method)
+
+    def get_option(self, option, hostvars=None):
+        ''' Custom override to unpack region from "placement" var '''
+        original_result = super(Connection, self).get_option(option, hostvars)
+
+        # If it's a dict, it's because we received aws_ec2's `placement` var,
+        # so we have some special handling to unpack it for us.
+        result = None
+        if option == 'region':
+            if isinstance(original_result, dict):
+                result = original_result.get('region', None)
+        if result is None:
+            result = original_result
+
+        return result
 
     def _get_boto_client(self, service, region_name=None):
         ''' Gets a boto3 client based on the STS token or a local profile '''
