@@ -614,7 +614,6 @@ class Connection(ConnectionBase):
             service,
             config=Config(signature_version="s3v4")
         )
-        client
         return client, profile_name
 
     @_ssm_retry
