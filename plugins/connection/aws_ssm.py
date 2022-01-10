@@ -364,7 +364,7 @@ class Connection(ConnectionBase):
     def start_session(self):
         ''' start ssm session '''
 
-            self.instance_id = self.get_option('instance_id')
+        self.instance_id = self.get_option('instance_id')
 
         display.vvv(u"ESTABLISH SSM CONNECTION TO: {0}".format(self.instance_id), host=self.host)
 
